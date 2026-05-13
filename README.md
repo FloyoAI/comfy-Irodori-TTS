@@ -156,8 +156,9 @@ IrodoriTTSのチェックポイントと実行設定をまとめた`irodori_mode
 - `enable_watermark`: codec側のウォーターマーク処理
 - `compile_model`: `torch.compile`の使用
 - `compile_dynamic`: `torch.compile`のdynamicモード
+- `runtime_cache_policy`: 生成後のモデル保持方針
 
-通常は`model_device = cuda`、`model_precision = bf16`または`fp32`、`codec_device = cpu`または`cuda`から環境に合わせて選びます。
+通常は`model_device = cuda`、`model_precision = bf16`または`fp32`、`codec_device = cpu`または`cuda`から環境に合わせて選びます。`runtime_cache_policy = offload_after_use`では生成後にモデルをCPUへ退避し、次回生成時に再びGPUへ戻します。
 
 > [!WARNING]
 > 旧版における `huggingface` からモデルをDLするノードは削除されました。

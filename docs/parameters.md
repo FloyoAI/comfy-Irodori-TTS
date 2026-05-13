@@ -25,6 +25,7 @@ IrodoriTTSのチェックポイントと実行設定をまとめ、`irodori_mode
 | `enable_watermark` | `False` | codec側のウォーターマーク処理を有効化します。通常は無効のままで構いません。 |
 | `compile_model` | `False` | `torch.compile`でTTSモデルをコンパイルします。初回生成は遅くなりますが、環境によっては以後の生成が速くなります。 |
 | `compile_dynamic` | `False` | `torch.compile`のdynamicモードを使います。入力長が変わる運用で試すための設定です。 |
+| `runtime_cache_policy` | `offload_after_use` | 生成後のruntime保持方針です。`offload_after_use`はキャッシュを残してCPUへ退避、`keep_gpu`はGPU上に保持、`unload_after_use`は生成後に完全破棄します。 |
 
 チェックポイントの`latent_dim`に応じて、使用するcodecは内部で自動選択されます。
 

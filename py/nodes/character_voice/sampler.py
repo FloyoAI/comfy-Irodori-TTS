@@ -7,7 +7,9 @@ from comfy_api.latest import io
 from ...modules.irodori_character_voice.inference_runtime import (
     RuntimeKey,
     SamplingRequest,
+    clear_cached_runtime,
     get_cached_runtime,
+    offload_cached_runtime,
 )
 from ...node_utils import mk_name
 from ..wrapper.common import CATEGORY, PACKAGE_NAME
@@ -198,19 +200,30 @@ class IrodoriCharacterVoiceSampler(io.ComfyNode):
             tail_mean_threshold=float(trim_tail_config.get("tail_mean_threshold", 0.1)),
         )
 
-        runtime, _ = get_cached_runtime(runtime_key)
-        if not runtime.model_cfg.use_character_condition:
-            raise ValueError(
-                "Loaded checkpoint does not enable character conditioning. "
-                "Use a Character Voice checkpoint."
-            )
-
         progress_bar = comfy.utils.ProgressBar(int(num_steps))
 
         def update_progress(current: int, total: int) -> None:
             progress_bar.update_absolute(int(current), int(total))
 
-        result = runtime.synthesize(req, log_fn=print, progress_callback=update_progress)
+        cache_policy = str(model_config.get("runtime_cache_policy", "offload_after_use"))
+        try:
+            runtime, _ = get_cached_runtime(runtime_key)
+            if not runtime.model_cfg.use_character_condition:
+                raise ValueError(
+                    "Loaded checkpoint does not enable character conditioning. "
+                    "Use a Character Voice checkpoint."
+                )
+            result = runtime.synthesize(req, log_fn=print, progress_callback=update_progress)
+        finally:
+            if cache_policy == "unload_after_use":
+                clear_cached_runtime()
+            elif cache_policy == "offload_after_use":
+                offload_cached_runtime()
+            elif cache_policy != "keep_gpu":
+                print(
+                    f"[Irodori Character Voice] unknown runtime_cache_policy={cache_policy!r}; "
+                    "keeping runtime on GPU."
+                )
 
         audios = result.audios or [result.audio]
         max_samples = max(int(audio.shape[-1]) for audio in audios)

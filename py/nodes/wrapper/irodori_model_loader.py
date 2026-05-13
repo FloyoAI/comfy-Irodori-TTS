@@ -13,6 +13,19 @@ from .irodori_common import (
 )
 
 
+def _normalize_precision_for_device(precision: str, device: str, label: str) -> str:
+    if str(device).strip().lower().startswith("cuda"):
+        return str(precision)
+    if str(precision).strip().lower() != "fp32":
+        print(
+            f"[IrodoriTTS Model Loader] {label}_precision={precision!r} is not supported on "
+            f"{device!r}; using 'fp32'.",
+            flush=True,
+        )
+        return "fp32"
+    return str(precision)
+
+
 class IrodoriModelLoader(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -65,6 +78,12 @@ class IrodoriModelLoader(io.ComfyNode):
                     default=False,
                     tooltip="torch.compileのdynamicモードを有効にします。入力長が変わる場合向けですが、通常は無効で構いません。",
                 ),
+                io.Combo.Input(
+                    "runtime_cache_policy",
+                    options=["offload_after_use", "keep_gpu", "unload_after_use"],
+                    default="offload_after_use",
+                    tooltip="生成後のモデル保持方針です。offload_after_useはCPUへ退避、keep_gpuはGPU保持、unload_after_useは完全破棄します。",
+                ),
             ],
             outputs=[
                 IO_MODEL_CONFIG.Output(display_name="irodori_model_config"),
@@ -82,9 +101,20 @@ class IrodoriModelLoader(io.ComfyNode):
         enable_watermark: bool,
         compile_model: bool,
         compile_dynamic: bool,
+        runtime_cache_policy: str,
     ):
         checkpoint_path = resolve_checkpoint_path(model)
         latent_dim = peek_latent_dim_from_checkpoint(checkpoint_path)
+        model_precision = _normalize_precision_for_device(
+            model_precision,
+            model_device,
+            "model",
+        )
+        codec_precision = _normalize_precision_for_device(
+            codec_precision,
+            codec_device,
+            "codec",
+        )
         config = {
             "checkpoint": checkpoint_path,
             "latent_dim": latent_dim,
@@ -96,5 +126,6 @@ class IrodoriModelLoader(io.ComfyNode):
             "enable_watermark": bool(enable_watermark),
             "compile_model": bool(compile_model),
             "compile_dynamic": bool(compile_dynamic),
+            "runtime_cache_policy": str(runtime_cache_policy),
         }
         return io.NodeOutput(config)

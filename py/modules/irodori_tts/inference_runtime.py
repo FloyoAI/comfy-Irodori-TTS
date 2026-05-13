@@ -25,6 +25,21 @@ from .tokenizer import PretrainedTextTokenizer
 from .watermark import SilentCipherWatermarker
 
 
+def _module_size_bytes(module: torch.nn.Module) -> int:
+    return sum(int(t.nbytes) for t in module.state_dict().values())
+
+
+def _request_comfy_free_memory(memory_required: int, device: torch.device) -> None:
+    if device.type == "cpu" or memory_required <= 0:
+        return
+    try:
+        import comfy.model_management as model_management
+
+        model_management.free_memory(int(memory_required), device)
+    except Exception as exc:
+        print(f"[IrodoriTTS] warning: ComfyUI memory free request failed: {exc}", flush=True)
+
+
 def _extension_data_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "data"
 
@@ -589,6 +604,7 @@ class InferenceRuntime:
         self.default_caption_max_len = default_caption_max_len
         self.lora_adapter_names = lora_adapter_names
         self.lora_base_scaling = lora_base_scaling or {}
+        self._offloaded = False
         self._infer_lock = threading.Lock()
 
     @classmethod
@@ -609,9 +625,11 @@ class InferenceRuntime:
         )
         model_cfg = ModelConfig(**model_cfg_dict)
 
-        model = TextToLatentRFDiT(model_cfg).to(model_device)
+        model = TextToLatentRFDiT(model_cfg)
         model.load_state_dict(model_state)
         model = model.to(dtype=model_dtype)
+        _request_comfy_free_memory(_module_size_bytes(model), model_device)
+        model = model.to(model_device)
         model.eval()
         model = _maybe_compile_inference_model(
             model,
@@ -715,6 +733,7 @@ class InferenceRuntime:
             _extension_data_dir() / "codecs" / codec_repo_safe
         )
         codec_cache_dir.mkdir(parents=True, exist_ok=True)
+        _request_comfy_free_memory(1536 * 1024 * 1024, codec_device)
         codec = DACVAECodec.load(
             repo_id=key.codec_repo,
             device=str(codec_device),
@@ -1004,6 +1023,7 @@ class InferenceRuntime:
         post_load_t0 = _measure_start(self.model_device, self.codec_device)
 
         with self._infer_lock, torch.inference_mode():
+            self.ensure_loaded()
             lora_active = bool(adapter_scales)
             if lora_active:
                 _apply_lora_settings(
@@ -1264,21 +1284,55 @@ class InferenceRuntime:
             messages=messages,
         )
 
-    def unload(self) -> None:
-        del self.model
-        del self.tokenizer
-        if self.caption_tokenizer is not None:
-            del self.caption_tokenizer
-        del self.codec
-        del self.watermarker
-        gc.collect()
-        for device in (self.model_device, self.codec_device):
+    @staticmethod
+    def _empty_device_cache(*devices: torch.device) -> None:
+        seen: set[tuple[str, int | None]] = set()
+        for device in devices:
+            key = (device.type, device.index)
+            if key in seen:
+                continue
+            seen.add(key)
             if device.type == "cuda":
                 torch.cuda.empty_cache()
             elif device.type == "mps":
                 mps = getattr(torch, "mps", None)
                 if mps is not None and hasattr(mps, "empty_cache"):
                     mps.empty_cache()
+
+    def ensure_loaded(self) -> None:
+        if not self._offloaded:
+            return
+        _request_comfy_free_memory(_module_size_bytes(self.model), self.model_device)
+        self.model.to(self.model_device)
+        _request_comfy_free_memory(_module_size_bytes(self.codec.model), self.codec_device)
+        self.codec.model.to(self.codec_device)
+        self.codec.device = self.codec_device
+        self.watermarker.ensure_loaded(device=str(self.codec_device))
+        self._offloaded = False
+
+    def offload(self) -> None:
+        with self._infer_lock:
+            if self._offloaded:
+                return
+            cpu = torch.device("cpu")
+            self.model.to(cpu)
+            self.codec.model.to(cpu)
+            self.codec.device = cpu
+            self.watermarker.unload()
+            self._offloaded = True
+            gc.collect()
+            self._empty_device_cache(self.model_device, self.codec_device)
+
+    def unload(self) -> None:
+        with self._infer_lock:
+            del self.model
+            del self.tokenizer
+            if self.caption_tokenizer is not None:
+                del self.caption_tokenizer
+            del self.codec
+            del self.watermarker
+            gc.collect()
+            self._empty_device_cache(self.model_device, self.codec_device)
 
 
 _RUNTIME_CACHE_LOCK = threading.Lock()
@@ -1312,6 +1366,14 @@ def clear_cached_runtime() -> None:
 
     if runtime is not None:
         runtime.unload()
+
+
+def offload_cached_runtime() -> None:
+    with _RUNTIME_CACHE_LOCK:
+        runtime = _RUNTIME_CACHE_VALUE
+
+    if runtime is not None:
+        runtime.offload()
 
 
 def _load_audio(path: str | Path) -> tuple[torch.Tensor, int]:
