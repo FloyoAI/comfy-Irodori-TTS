@@ -37,7 +37,8 @@ class IrodoriCharacterVoiceSampler(io.ComfyNode):
                 ),
                 io.Image.Input(
                     "character_image",
-                    tooltip="声質や話し方の条件に使うキャラクター画像です。バッチ画像の場合は先頭の1枚を使用します。",
+                    optional=True,
+                    tooltip="声質や話し方の条件に使うキャラクター画像です。未接続の場合は画像条件なしで生成します。バッチ画像の場合は先頭の1枚を使用します。",
                 ),
                 io.String.Input(
                     "text",
@@ -129,7 +130,6 @@ class IrodoriCharacterVoiceSampler(io.ComfyNode):
     def execute(
         cls,
         model_config: dict,
-        character_image: torch.Tensor,
         text: str,
         seed: int,
         seconds: float,
@@ -140,6 +140,7 @@ class IrodoriCharacterVoiceSampler(io.ComfyNode):
         context_kv_cache: bool,
         max_text_len: int,
         trim_tail: bool,
+        character_image: torch.Tensor | None = None,
         cfg_config: dict | None = None,
         rescale_config: dict | None = None,
         trim_tail_config: dict | None = None,
