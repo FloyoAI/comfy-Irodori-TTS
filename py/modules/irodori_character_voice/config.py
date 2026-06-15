@@ -243,6 +243,12 @@ def load_experiment_yaml(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def model_config_from_checkpoint(raw: dict) -> ModelConfig:
+    """Build ModelConfig from checkpoint metadata, ignoring derived/legacy keys."""
+    allowed = {f.name for f in fields(ModelConfig)}
+    return ModelConfig(**{k: v for k, v in raw.items() if k in allowed})
+
+
 def merge_dataclass_overrides(base: T, overrides: dict[str, Any] | None, section: str) -> T:
     """
     Merge mapping overrides into a dataclass instance with key validation.

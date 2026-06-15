@@ -17,7 +17,7 @@ from safetensors.torch import load_file as load_safetensors_file
 from .cache_paths import extension_data_dir, image_encoder_cache_root
 from .checkpoint_metadata import read_safetensors_metadata_config
 from .codec import DACVAECodec, patchify_latent, unpatchify_latent
-from .config import ModelConfig
+from .config import ModelConfig, model_config_from_checkpoint
 from .image_encoder import build_character_transform, coerce_character_image
 from .lora import checkpoint_state_uses_lora
 from .model import TextToLatentRFDiT
@@ -696,7 +696,7 @@ class InferenceRuntime:
             raw_cfg=model_cfg_dict,
             key=key,
         )
-        model_cfg = ModelConfig(**model_cfg_dict)
+        model_cfg = model_config_from_checkpoint(model_cfg_dict)
 
         model = TextToLatentRFDiT(model_cfg)
         model.load_state_dict(model_state)

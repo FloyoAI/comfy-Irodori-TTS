@@ -16,7 +16,7 @@ from safetensors import safe_open
 from safetensors.torch import load_file as load_safetensors_file
 
 from .codec import DACVAECodec, patchify_latent, unpatchify_latent
-from .config import ModelConfig
+from .config import ModelConfig, model_config_from_checkpoint
 from .duration import build_duration_features
 from .model import TextToLatentRFDiT
 from .rf import sample_euler_rf_cfg
@@ -623,7 +623,7 @@ class InferenceRuntime:
         model_state, model_cfg_dict, train_cfg = _load_checkpoint_for_inference(
             Path(key.checkpoint)
         )
-        model_cfg = ModelConfig(**model_cfg_dict)
+        model_cfg = model_config_from_checkpoint(model_cfg_dict)
 
         model = TextToLatentRFDiT(model_cfg)
         model.load_state_dict(model_state)
@@ -776,7 +776,7 @@ class InferenceRuntime:
         messages: list[str],
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         runtime_dtype = next(self.model.parameters()).dtype
-        if not self.model_cfg.use_speaker_condition:
+        if not self.model_cfg.use_speaker_condition_resolved:
             if req.ref_wav is not None or req.ref_latent is not None:
                 messages.append(
                     "info: speaker conditioning is disabled for this checkpoint; ignoring reference input."
@@ -973,7 +973,7 @@ class InferenceRuntime:
             None if req.speaker_kv_max_layers is None else int(req.speaker_kv_max_layers)
         )
         if speaker_kv_scale is not None:
-            if not self.model_cfg.use_speaker_condition:
+            if not self.model_cfg.use_speaker_condition_resolved:
                 messages.append(
                     "info: speaker conditioning is disabled for this checkpoint; ignoring speaker_kv_scale."
                 )
@@ -1005,7 +1005,7 @@ class InferenceRuntime:
             cfg_scale_speaker=req.cfg_scale_speaker,
             cfg_scale=req.cfg_scale,
             use_caption_condition=has_caption_text,
-            use_speaker_condition=self.model_cfg.use_speaker_condition,
+            use_speaker_condition=self.model_cfg.use_speaker_condition_resolved,
         )
         messages.extend(scale_messages)
         for msg in scale_messages:
@@ -1093,7 +1093,7 @@ class InferenceRuntime:
                     has_speaker_duration = torch.zeros(
                         (num_candidates,), dtype=torch.bool, device=self.model_device
                     )
-                    if self.model_cfg.use_speaker_condition and ref_mask is not None:
+                    if self.model_cfg.use_speaker_condition_resolved and ref_mask is not None:
                         has_speaker_duration = ref_mask.any(dim=1)
                     duration_features = build_duration_features(
                         [normalized_text] * num_candidates,
@@ -1121,8 +1121,18 @@ class InferenceRuntime:
                         text_mask=duration_text_mask,
                         speaker_state=duration_speaker_state,
                         speaker_mask=_duration_speaker_mask,
+                        caption_state=_duration_caption_state,
+                        caption_mask=_duration_caption_mask,
                         duration_features=duration_features,
                         has_speaker=has_speaker_duration,
+                        has_caption=torch.full(
+                            (num_candidates,),
+                            has_caption_text,
+                            dtype=torch.bool,
+                            device=self.model_device,
+                        )
+                        if self.model_cfg.use_caption_condition
+                        else None,
                     )
                     pred_frames = torch.expm1(pred_log_frames).float().mean().item()
                     scaled_frames = pred_frames * duration_scale
